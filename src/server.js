@@ -20,6 +20,8 @@ function createApp(cfg) {
 
   app.get('/healthz', (req, res) => res.json({ ok: true }));
 
+  app.get('/logo.png', (req, res) => res.sendFile(require('path').join(__dirname, '..', 'logo.png')));
+
   // ---- OAuth install flow ------------------------------------------------
 
   app.get('/auth', (req, res) => {

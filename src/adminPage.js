@@ -61,7 +61,7 @@ function renderAdminPage({ shop, record, demoBotId, saved }) {
 </head>
 <body>
 <div class="cb-panel">
-  <h2>💬 Conferbot Live Chat</h2>
+  <h2><img src="/logo.png" alt="Conferbot" style="width:44px;height:44px"> Conferbot Live Chat</h2>
   <p class="cb-sub">Add a chat assistant to <strong>${escapeHtml(shop)}</strong> in under a minute. Only one thing to paste!</p>
   ${status}
   <form method="post" action="/app/save">
