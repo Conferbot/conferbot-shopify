@@ -2,6 +2,14 @@
 
 Installs the [Conferbot](https://conferbot.com) AI chat widget on a Shopify storefront. Same product as the [PrestaShop module](https://github.com/Conferbot/conferbot-prestashop), Shopify-shaped: a small Node.js app that handles OAuth, registers a ScriptTag, and serves a per-shop widget loader.
 
+## See it in action
+
+Paste the Chatbot ID in the app settings, save, and the chat is live on the storefront (recorded against the mock storefront from the e2e suite):
+
+![Conferbot Shopify demo: paste the bot ID in the app settings, save, chat appears on the storefront](docs/demo.gif)
+
+[HD video (MP4)](docs/demo.mp4)
+
 ## How it works
 
 ```
