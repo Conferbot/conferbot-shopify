@@ -6,6 +6,7 @@ const shopify = require('./shopify');
 const ShopStore = require('./store');
 const { buildLoaderScript, extractBotId, isValidBotId } = require('./widgetScript');
 const { renderAdminPage } = require('./adminPage');
+const session = require('./session');
 
 /**
  * App factory - takes config so tests can inject a mock Shopify admin base
@@ -71,7 +72,9 @@ function createApp(cfg) {
       });
 
       store.upsert(shop, { accessToken, scriptTagId, enabled: store.get(shop) ? store.get(shop).enabled : false });
-      res.redirect(`/app?shop=${encodeURIComponent(shop)}`);
+      // Straight to settings: a short-lived token stands in for Shopify's launch signature.
+      const token = session.issueToken(shop, cfg.apiSecret, 10 * 60 * 1000);
+      res.redirect(`/app?shop=${encodeURIComponent(shop)}&session=${encodeURIComponent(token)}`);
     } catch (e) {
       res.status(502).send('Installation failed: ' + e.message);
     }
@@ -79,16 +82,28 @@ function createApp(cfg) {
 
   // ---- Settings page -------------------------------------------------------
 
+  // Only the shop's own admin may open or save its settings: the page opens
+  // from Shopify's signed admin launch (hmac + fresh timestamp) or with the
+  // token from the install, for a shop that installed the app; the form then
+  // carries a token signed with the app secret.
+  const launchedBy = (query, shop) =>
+    (shopify.verifyHmac(query, cfg.apiSecret) && session.isFreshLaunch(query)) ||
+    session.verifyToken(String(query.session || ''), shop, cfg.apiSecret);
+
   app.get('/app', (req, res) => {
     const shop = String(req.query.shop || '');
     if (!shopify.isValidShopDomain(shop)) {
       return res.status(400).send('Missing or invalid shop parameter');
+    }
+    if (!store.get(shop) || !launchedBy(req.query, shop)) {
+      return res.status(401).send('Open Conferbot from your Shopify admin (Apps > Conferbot).');
     }
     res.send(renderAdminPage({
       shop,
       record: store.get(shop),
       demoBotId: cfg.demoBotId,
       saved: req.query.saved === '1',
+      formToken: session.issueToken(shop, cfg.apiSecret),
     }));
   });
 
@@ -97,6 +112,10 @@ function createApp(cfg) {
     if (!shopify.isValidShopDomain(shop)) {
       return res.status(400).send('Missing or invalid shop parameter');
     }
+    const formToken = String(req.body.token || '');
+    if (!store.get(shop) || !session.verifyToken(formToken, shop, cfg.apiSecret)) {
+      return res.status(401).send('This settings page has expired. Open Conferbot from your Shopify admin again.');
+    }
     const botId = extractBotId(req.body.botId);
     const enabled = req.body.enabled === '1' && isValidBotId(botId);
     store.upsert(shop, {
@@ -104,7 +123,7 @@ function createApp(cfg) {
       enabled,
       embedType: req.body.embedType === 'popup_chat' ? 'popup_chat' : 'live_chat',
     });
-    res.redirect(`/app?shop=${encodeURIComponent(shop)}&saved=1`);
+    res.redirect(`/app?shop=${encodeURIComponent(shop)}&session=${encodeURIComponent(formToken)}&saved=1`);
   });
 
   // ---- Storefront loader (the ScriptTag src) --------------------------------
