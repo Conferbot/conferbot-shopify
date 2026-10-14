@@ -25,7 +25,9 @@ every storefront page load
      with { platform: "shopify", shopDomain, storeCurrency, user? }
 ```
 
-The only merchant-facing setting is the **Chatbot ID** (paste the bare ID, the full embed snippet, or a dashboard URL - the ID is extracted automatically). A public demo bot (`691c970890527a0468f9b2c9`) is offered one-click so the widget works before signing up. All widget appearance/behavior is configured in the Conferbot dashboard and delivered at runtime.
+The only merchant-facing setting is the **Chatbot ID** (paste the bare ID, the full embed snippet, or a dashboard URL - the ID is extracted automatically). A public demo bot (`691c970890527a0468f9b2c9`) is offered one-click so the widget works before signing up. Everything visitors see is set per bot in the Conferbot dashboard and delivered at runtime, with nothing to configure in the store: flows and AI agents, live chat with handover to your team (queue position, leave a message when nobody is free, read receipts, file sharing, post-chat rating), the home screen, themes and dark mode, colours, launcher and mascot, greetings, languages and disabled URLs.
+
+The settings page opens only for the shop's own admin: from Shopify's signed admin launch (HMAC and a fresh timestamp) or with the short-lived token from the install, and every save carries a token signed with the app secret. A bare `?shop=` is refused.
 
 ## Project layout
 
