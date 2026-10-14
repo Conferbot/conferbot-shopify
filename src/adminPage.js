@@ -11,7 +11,7 @@ function escapeHtml(s) {
   }[c]));
 }
 
-function renderAdminPage({ shop, record, demoBotId, saved }) {
+function renderAdminPage({ shop, record, demoBotId, saved, formToken }) {
   const botId = record ? record.botId || '' : '';
   const enabled = record ? !!record.enabled : false;
   const embedType = record && record.embedType === 'popup_chat' ? 'popup_chat' : 'live_chat';
@@ -66,6 +66,7 @@ function renderAdminPage({ shop, record, demoBotId, saved }) {
   ${status}
   <form method="post" action="/app/save">
     <input type="hidden" name="shop" value="${escapeHtml(shop)}">
+    <input type="hidden" name="token" value="${escapeHtml(formToken || '')}">
     <div class="cb-step">
       <label class="cb-step-label" for="cb-id">1. Paste your Chatbot ID</label>
       <div class="cb-step-help">
