@@ -169,12 +169,47 @@ test('step 2d: reinstalling does not duplicate the ScriptTag', async () => {
   assert.strictEqual(mockState.scriptTags.length, 1);
 });
 
+let formToken; // the settings page's signed form token
+
+function adminLaunch(shop = SHOP) {
+  const query = { shop, timestamp: String(Math.floor(Date.now() / 1000)) };
+  query.hmac = sign(query, API_SECRET);
+  return new URLSearchParams(query).toString();
+}
+
 test('step 3: settings page renders with the demo bot offer', async () => {
-  const res = await fetch(`${appUrl}/app?shop=${SHOP}`);
+  const res = await fetch(`${appUrl}/app?${adminLaunch()}`);
   const html = await res.text();
   assert.strictEqual(res.status, 200);
   assert.ok(html.includes('Paste your Chatbot ID'));
   assert.ok(html.includes(`data-demo-id="${DEMO_ID}"`));
+  formToken = html.match(/name="token" value="([^"]+)"/)[1];
+  assert.ok(formToken.length > 40);
+});
+
+test('step 3b: settings page refuses anyone but the shop admin', async () => {
+  // A bare ?shop= (the old hole), a stale or forged launch, and a shop that never installed.
+  assert.strictEqual((await fetch(`${appUrl}/app?shop=${SHOP}`)).status, 401);
+  const stale = { shop: SHOP, timestamp: '1700000000' };
+  stale.hmac = sign(stale, API_SECRET);
+  assert.strictEqual((await fetch(`${appUrl}/app?${new URLSearchParams(stale)}`)).status, 401);
+  const forged = { shop: SHOP, timestamp: String(Math.floor(Date.now() / 1000)), hmac: 'a'.repeat(64) };
+  assert.strictEqual((await fetch(`${appUrl}/app?${new URLSearchParams(forged)}`)).status, 401);
+  assert.strictEqual((await fetch(`${appUrl}/app?${adminLaunch('other.myshopify.com')}`)).status, 401);
+});
+
+test('step 3c: saving without the page token, or with another shop\'s, is refused', async () => {
+  const post = (fields) => fetch(`${appUrl}/app/save`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ shop: SHOP, botId: 'aaaaaaaaaaaaaaaaaaaaaaaa', enabled: '1', ...fields }),
+    redirect: 'manual',
+  });
+  assert.strictEqual((await post({})).status, 401);
+  assert.strictEqual((await post({ token: 'x.y' })).status, 401);
+  const session = require('../src/session');
+  assert.strictEqual((await post({ token: session.issueToken('other.myshopify.com', API_SECRET) })).status, 401);
+  assert.strictEqual((await post({ token: session.issueToken(SHOP, 'wrong-secret') })).status, 401);
 });
 
 test('step 4: loader is a no-op before configuration', async () => {
@@ -190,6 +225,7 @@ test('step 5: saving a pasted snippet extracts the bot id and enables the chat',
     botId: `window.ConferbotWidget("${DEMO_ID}", "live_chat")`, // full snippet paste
     enabled: '1',
     embedType: 'live_chat',
+    token: formToken,
   });
   const res = await fetch(`${appUrl}/app/save`, {
     method: 'POST',
