@@ -95,9 +95,59 @@ async function ensureScriptTag({ shop, accessToken, src, apiVersion, adminBase }
   return (await createRes.json()).script_tag.id;
 }
 
+/**
+ * Verifies a webhook: X-Shopify-Hmac-Sha256 is the base64 HMAC-SHA256 of the
+ * raw request body with the app secret. Must be checked against the exact
+ * bytes received, before any JSON parsing.
+ */
+function verifyWebhookHmac(rawBody, hmacHeader, secret) {
+  if (!secret || typeof hmacHeader !== 'string' || !hmacHeader || !Buffer.isBuffer(rawBody)) {
+    return false;
+  }
+  const digest = crypto.createHmac('sha256', secret).update(rawBody).digest('base64');
+  const a = Buffer.from(digest, 'utf8');
+  const b = Buffer.from(hmacHeader, 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/**
+ * Idempotently subscribes `address` to a webhook topic (e.g. app/uninstalled).
+ * Returns the webhook id.
+ */
+async function ensureWebhook({ shop, accessToken, topic, address, apiVersion, adminBase }) {
+  const base = adminBase.replace('{shop}', shop);
+  const api = `${base}/admin/api/${apiVersion}/webhooks.json`;
+  const headers = {
+    'X-Shopify-Access-Token': accessToken,
+    'Content-Type': 'application/json',
+  };
+
+  const listRes = await fetch(`${api}?topic=${encodeURIComponent(topic)}`, { headers });
+  if (!listRes.ok) {
+    throw new Error(`webhook list failed: HTTP ${listRes.status}`);
+  }
+  const existing = (await listRes.json()).webhooks || [];
+  const ours = existing.find((w) => w.topic === topic && w.address === address);
+  if (ours) {
+    return ours.id;
+  }
+
+  const createRes = await fetch(api, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ webhook: { topic, address, format: 'json' } }),
+  });
+  if (!createRes.ok) {
+    throw new Error(`webhook create failed: HTTP ${createRes.status}`);
+  }
+  return (await createRes.json()).webhook.id;
+}
+
 module.exports = {
   isValidShopDomain,
   verifyHmac,
+  verifyWebhookHmac,
+  ensureWebhook,
   buildAuthorizeUrl,
   exchangeCodeForToken,
   ensureScriptTag,
