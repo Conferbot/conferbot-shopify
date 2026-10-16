@@ -71,6 +71,16 @@ function createApp(cfg) {
         adminBase: cfg.adminBase,
       });
 
+      // Shopify deletes the ScriptTag itself on uninstall; this webhook lets
+      // us drop the shop record and its access token at the same moment.
+      await shopify.ensureWebhook({
+        shop, accessToken,
+        topic: 'app/uninstalled',
+        address: `${cfg.appUrl}/webhooks/app/uninstalled`,
+        apiVersion: cfg.apiVersion,
+        adminBase: cfg.adminBase,
+      });
+
       store.upsert(shop, { accessToken, scriptTagId, enabled: store.get(shop) ? store.get(shop).enabled : false });
       // Straight to settings: a short-lived token stands in for Shopify's launch signature.
       const token = session.issueToken(shop, cfg.apiSecret, 10 * 60 * 1000);
@@ -78,6 +88,38 @@ function createApp(cfg) {
     } catch (e) {
       res.status(502).send('Installation failed: ' + e.message);
     }
+  });
+
+  // ---- Webhooks --------------------------------------------------------------
+  //
+  // app/uninstalled (registered on install) and the three mandatory
+  // compliance topics (set in the Partner dashboard under App setup >
+  // Compliance webhooks, pointing at the URLs below). The HMAC is checked
+  // against the raw body before anything is parsed.
+
+  const WEBHOOK_TOPICS = {
+    'app/uninstalled': (shop) => store.remove(shop),
+    'shop/redact': (shop) => store.remove(shop),
+    // The app keeps no customer data (only shop domain, token and bot
+    // settings), so there is nothing to export or erase.
+    'customers/data_request': () => {},
+    'customers/redact': () => {},
+  };
+
+  app.post('/webhooks/:group/:event', express.raw({ type: '*/*', limit: '1mb' }), (req, res) => {
+    const topic = `${req.params.group}/${req.params.event}`;
+    const handle = WEBHOOK_TOPICS[topic];
+    if (!handle) {
+      return res.status(404).send('Unknown webhook');
+    }
+    if (!shopify.verifyWebhookHmac(req.body, req.get('X-Shopify-Hmac-Sha256'), cfg.apiSecret)) {
+      return res.status(401).send('HMAC verification failed');
+    }
+    const shop = String(req.get('X-Shopify-Shop-Domain') || '');
+    if (shopify.isValidShopDomain(shop) && store.get(shop)) {
+      handle(shop);
+    }
+    res.status(200).send('ok');
   });
 
   // ---- Settings page -------------------------------------------------------
