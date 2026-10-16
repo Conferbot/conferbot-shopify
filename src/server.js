@@ -15,7 +15,36 @@ const session = require('./session');
 function createApp(cfg) {
   const app = express();
   const store = new ShopStore(cfg.dataFile);
-  const pendingStates = new Map(); // state nonce -> shop (single-instance OAuth CSRF guard)
+  // state nonce -> { shop, expires } (single-instance OAuth CSRF guard).
+  // Nonces expire after 10 minutes and the map is capped, so repeated
+  // /auth hits cannot grow it without bound.
+  const pendingStates = new Map();
+  const STATE_TTL_MS = 10 * 60 * 1000;
+  const MAX_PENDING_STATES = 10000;
+  const takeState = (state, shop) => {
+    const entry = pendingStates.get(state);
+    pendingStates.delete(state);
+    return !!entry && entry.shop === shop && entry.expires > Date.now();
+  };
+  const addState = (state, shop) => {
+    const now = Date.now();
+    for (const [key, entry] of pendingStates) {
+      if (entry.expires <= now) pendingStates.delete(key);
+    }
+    while (pendingStates.size >= MAX_PENDING_STATES) {
+      pendingStates.delete(pendingStates.keys().next().value); // oldest first
+    }
+    pendingStates.set(state, { shop, expires: now + STATE_TTL_MS });
+  };
+
+  // The settings page may only be framed by the shop's own admin (Shopify's
+  // requirement for embedded apps, and no clickjacking from anywhere else).
+  const frameGuard = (res, shop) => {
+    const ancestors = shopify.isValidShopDomain(shop)
+      ? `https://${shop} https://admin.shopify.com`
+      : "'none'";
+    res.set('Content-Security-Policy', `frame-ancestors ${ancestors};`);
+  };
 
   app.use(express.urlencoded({ extended: false }));
 
@@ -31,7 +60,7 @@ function createApp(cfg) {
       return res.status(400).send('Invalid shop parameter. Expected x.myshopify.com');
     }
     const state = crypto.randomBytes(16).toString('hex');
-    pendingStates.set(state, shop);
+    addState(state, shop);
     const url = shopify.buildAuthorizeUrl({
       shop,
       apiKey: cfg.apiKey,
@@ -49,10 +78,9 @@ function createApp(cfg) {
       if (!shopify.isValidShopDomain(shop)) {
         return res.status(400).send('Invalid shop');
       }
-      if (!state || pendingStates.get(state) !== shop) {
+      if (!state || !takeState(String(state), shop)) {
         return res.status(403).send('Invalid OAuth state');
       }
-      pendingStates.delete(state);
       if (!shopify.verifyHmac(req.query, cfg.apiSecret)) {
         return res.status(403).send('HMAC verification failed');
       }
@@ -134,6 +162,7 @@ function createApp(cfg) {
 
   app.get('/app', (req, res) => {
     const shop = String(req.query.shop || '');
+    frameGuard(res, shop);
     if (!shopify.isValidShopDomain(shop)) {
       return res.status(400).send('Missing or invalid shop parameter');
     }
@@ -151,6 +180,7 @@ function createApp(cfg) {
 
   app.post('/app/save', (req, res) => {
     const shop = String(req.body.shop || '');
+    frameGuard(res, shop);
     if (!shopify.isValidShopDomain(shop)) {
       return res.status(400).send('Missing or invalid shop parameter');
     }
