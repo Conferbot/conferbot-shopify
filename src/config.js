@@ -11,7 +11,7 @@ module.exports = {
   apiKey: process.env.SHOPIFY_API_KEY || '',
   apiSecret: process.env.SHOPIFY_API_SECRET || '',
   scopes: process.env.SHOPIFY_SCOPES || 'write_script_tags',
-  apiVersion: process.env.SHOPIFY_API_VERSION || '2024-01',
+  apiVersion: process.env.SHOPIFY_API_VERSION || '2026-07',
   // '{shop}' placeholder is replaced with the myshopify domain.
   adminBase: process.env.SHOPIFY_ADMIN_BASE || 'https://{shop}',
   widgetScriptUrl: process.env.CONFERBOT_WIDGET_URL || 'https://cdn.conferbot.com/dist/v1/widget.min.js',
