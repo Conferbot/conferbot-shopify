@@ -32,7 +32,7 @@ let mockPort;
 let appServer;
 let appPort;
 let appUrl;
-const mockState = { tokenRequests: [], scriptTags: [], nextId: 1001 };
+const mockState = { tokenRequests: [], scriptTags: [], webhooks: [], nextId: 1001 };
 
 function sign(query, secret) {
   const message = Object.keys(query)
@@ -67,6 +67,19 @@ before(async () => {
           res.statusCode = 201;
           res.setHeader('Content-Type', 'application/json');
           return res.end(JSON.stringify({ script_tag: tag }));
+        }
+      }
+      if (url.pathname.includes('/webhooks.json')) {
+        res.setHeader('Content-Type', 'application/json');
+        if (req.method === 'GET') {
+          return res.end(JSON.stringify({ webhooks: mockState.webhooks }));
+        }
+        if (req.method === 'POST') {
+          const hook = JSON.parse(body).webhook;
+          hook.id = mockState.nextId++;
+          mockState.webhooks.push(hook);
+          res.statusCode = 201;
+          return res.end(JSON.stringify({ webhook: hook }));
         }
       }
       res.statusCode = 404;
@@ -142,6 +155,10 @@ test('step 2: signed OAuth callback exchanges the code and installs the ScriptTa
   assert.strictEqual(mockState.scriptTags.length, 1);
   assert.strictEqual(mockState.scriptTags[0].event, 'onload');
   assert.strictEqual(mockState.scriptTags[0].src, `${appUrl}/script.js?shop=${encodeURIComponent(SHOP)}`);
+  // and the uninstall webhook, so the shop record goes when the app does
+  assert.strictEqual(mockState.webhooks.length, 1);
+  assert.strictEqual(mockState.webhooks[0].topic, 'app/uninstalled');
+  assert.strictEqual(mockState.webhooks[0].address, `${appUrl}/webhooks/app/uninstalled`);
 });
 
 test('step 2b: callback with a bad hmac is rejected', async () => {
@@ -167,6 +184,7 @@ test('step 2d: reinstalling does not duplicate the ScriptTag', async () => {
   const res = await fetch(`${appUrl}/auth/callback?${new URLSearchParams(query)}`, { redirect: 'manual' });
   assert.strictEqual(res.status, 302);
   assert.strictEqual(mockState.scriptTags.length, 1);
+  assert.strictEqual(mockState.webhooks.length, 1);
 });
 
 let formToken; // the settings page's signed form token
@@ -287,4 +305,41 @@ test('step 7: real browser - widget mounts on a storefront page', { skip: proces
     await browser.close();
     await new Promise((r) => storefront.close(r));
   }
+});
+
+// ---- webhooks (run last: they remove the shop) ------------------------------
+
+function webhook(topic, payload, { shop = SHOP, secret = API_SECRET, hmac } = {}) {
+  const body = JSON.stringify(payload);
+  return fetch(`${appUrl}/webhooks/${topic}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Shopify-Shop-Domain': shop,
+      'X-Shopify-Topic': topic,
+      'X-Shopify-Hmac-Sha256': hmac || crypto.createHmac('sha256', secret).update(body).digest('base64'),
+    },
+    body,
+  });
+}
+
+test('webhooks: a bad or missing HMAC is refused and nothing changes', async () => {
+  assert.strictEqual((await webhook('app/uninstalled', { id: 1 }, { secret: 'wrong' })).status, 401);
+  assert.strictEqual((await webhook('shop/redact', { shop_domain: SHOP }, { hmac: 'AAAA' })).status, 401);
+  assert.strictEqual((await webhook('orders/create', {})).status, 404);
+  const loader = await (await fetch(`${appUrl}/script.js?shop=${SHOP}`)).text();
+  assert.ok(loader.includes(DEMO_ID));
+});
+
+test('webhooks: customers/data_request and customers/redact acknowledge (no customer data kept)', async () => {
+  assert.strictEqual((await webhook('customers/data_request', { shop_domain: SHOP, customer: { id: 1 } })).status, 200);
+  assert.strictEqual((await webhook('customers/redact', { shop_domain: SHOP, customer: { id: 1 } })).status, 200);
+});
+
+test('webhooks: app/uninstalled drops the shop record and its token', async () => {
+  assert.strictEqual((await webhook('app/uninstalled', { domain: SHOP })).status, 200);
+  assert.match(await (await fetch(`${appUrl}/script.js?shop=${SHOP}`)).text(), /not configured/);
+  assert.strictEqual((await fetch(`${appUrl}/app?${adminLaunch()}`)).status, 401);
+  // shop/redact (48h after uninstall) is then a harmless no-op
+  assert.strictEqual((await webhook('shop/redact', { shop_domain: SHOP })).status, 200);
 });
