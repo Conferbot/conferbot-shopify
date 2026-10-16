@@ -71,7 +71,9 @@ function renderAdminPage({ shop, record, demoBotId, saved, formToken }) {
       <label class="cb-step-label" for="cb-id">1. Paste your Chatbot ID</label>
       <div class="cb-step-help">
         Find it in your <a href="https://app.conferbot.com" target="_blank" rel="noopener">Conferbot dashboard</a>:
-        open your bot, click "Share", then "Copy Bot ID". Pasting the whole code snippet also works - we will find the ID for you.
+        open your bot, click "Share", then "Embed into your website". The ID is the 24-character code inside
+        <code>ConferbotWidget("...")</code> in the snippet (it is also in the address bar: .../chatbot/<em>ID</em>/embed).
+        Pasting the whole snippet works too - we will find the ID for you.
       </div>
       <input class="cb-input" type="text" id="cb-id" name="botId" value="${escapeHtml(botId)}"
              placeholder="e.g. 64a1b2c3d4e5f6a7b8c9d0e1">
