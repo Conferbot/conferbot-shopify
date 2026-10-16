@@ -343,3 +343,10 @@ test('webhooks: app/uninstalled drops the shop record and its token', async () =
   // shop/redact (48h after uninstall) is then a harmless no-op
   assert.strictEqual((await webhook('shop/redact', { shop_domain: SHOP })).status, 200);
 });
+
+test('settings page may only be framed by the shop admin', async () => {
+  const res = await fetch(`${appUrl}/app?shop=${SHOP}`);
+  assert.strictEqual(res.headers.get('content-security-policy'), `frame-ancestors https://${SHOP} https://admin.shopify.com;`);
+  const bad = await fetch(`${appUrl}/app?shop=evil.com`);
+  assert.strictEqual(bad.headers.get('content-security-policy'), "frame-ancestors 'none';");
+});
