@@ -2,7 +2,12 @@
 
 /**
  * The app's settings page - same two-step design as the PrestaShop module:
- * paste the bot ID (auto-extracted from anything), flip the switch, save.
+ * paste the bot ID (auto-extracted from anything), flip the switch, save -
+ * plus the one Shopify step: switch the app embed on in the theme editor.
+ *
+ * The page is embedded in the Shopify admin. App Bridge loads first; the page
+ * reads and saves its settings through /api/settings with a session token
+ * (shopify.idToken()), so the HTML itself carries no shop data.
  */
 
 function escapeHtml(s) {
@@ -11,23 +16,13 @@ function escapeHtml(s) {
   }[c]));
 }
 
-function renderAdminPage({ shop, record, demoBotId, saved, formToken }) {
-  const botId = record ? record.botId || '' : '';
-  const enabled = record ? !!record.enabled : false;
-  const embedType = record && record.embedType === 'popup_chat' ? 'popup_chat' : 'live_chat';
-
-  const status = saved
-    ? '<div class="cb-status ok">✅ Saved! The chat is live on your storefront.</div>'
-    : !botId
-      ? '<div class="cb-status warn">👇 Just one step: paste your Chatbot ID below and press the big blue button.</div>'
-      : !enabled
-        ? '<div class="cb-status warn">⏸️ The chat is currently switched OFF. Turn it on below when you are ready.</div>'
-        : '<div class="cb-status ok">✅ All set! The chat widget is live on your store.</div>';
-
+function renderAdminPage({ apiKey, demoBotId }) {
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="shopify-api-key" content="${escapeHtml(apiKey)}">
+<script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Conferbot - AI Chatbot, Live Chat &amp; Customer Support</title>
 <style>
@@ -57,16 +52,17 @@ function renderAdminPage({ shop, record, demoBotId, saved, formToken }) {
   .cb-advanced summary { cursor: pointer; color: #6b7280; font-weight: 600; font-size: 14px; }
   .cb-select { font-size: 15px; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; margin-top: 12px; }
   .cb-help { margin-top: 18px; text-align: center; color: #6b7280; }
+  .cb-embed-link { display: inline-block; background: #fff; color: #2563eb; border: 2px solid #2563eb; border-radius: 10px; padding: 10px 16px; font-weight: 700; text-decoration: none; }
+  .cb-embed-link:hover { background: #eff6ff; }
+  .cb-save[disabled] { opacity: .6; cursor: wait; }
 </style>
 </head>
 <body>
 <div class="cb-panel">
   <h2><img src="/logo.png" alt="Conferbot" style="width:44px;height:44px"> Conferbot Live Chat</h2>
-  <p class="cb-sub">Add a chat assistant to <strong>${escapeHtml(shop)}</strong> in under a minute. Only one thing to paste!</p>
-  ${status}
-  <form method="post" action="/app/save">
-    <input type="hidden" name="shop" value="${escapeHtml(shop)}">
-    <input type="hidden" name="token" value="${escapeHtml(formToken || '')}">
+  <p class="cb-sub">Add a chat assistant to <strong id="cb-shop">your store</strong> in under a minute. Only one thing to paste!</p>
+  <div id="cb-status" class="cb-status warn">Loading your settings...</div>
+  <form id="cb-form">
     <div class="cb-step">
       <label class="cb-step-label" for="cb-id">1. Paste your Chatbot ID</label>
       <div class="cb-step-help">
@@ -75,7 +71,7 @@ function renderAdminPage({ shop, record, demoBotId, saved, formToken }) {
         <code>ConferbotWidget("...")</code> in the snippet (it is also in the address bar: .../chatbot/<em>ID</em>/embed).
         Pasting the whole snippet works too - we will find the ID for you.
       </div>
-      <input class="cb-input" type="text" id="cb-id" name="botId" value="${escapeHtml(botId)}"
+      <input class="cb-input" type="text" id="cb-id" name="botId" value=""
              placeholder="e.g. 64a1b2c3d4e5f6a7b8c9d0e1">
       <div class="cb-demo">
         No account yet?
@@ -86,32 +82,101 @@ function renderAdminPage({ shop, record, demoBotId, saved, formToken }) {
     <div class="cb-step">
       <span class="cb-step-label">2. Turn the chat on</span>
       <label class="cb-switch">
-        <input type="checkbox" name="enabled" value="1" ${enabled ? 'checked' : ''}>
+        <input type="checkbox" id="cb-enabled" name="enabled" value="1">
         <span class="cb-slider"></span>
       </label>
       <span class="cb-switch-text">Show the chat bubble on my store</span>
     </div>
-    <button class="cb-save" type="submit">Save - start chatting with my customers 🎉</button>
+    <div class="cb-step">
+      <span class="cb-step-label">3. Switch on Conferbot in your theme</span>
+      <div class="cb-step-help">
+        Shopify adds the chat to your storefront through your theme. Do this once: open the theme editor,
+        make sure <strong>Conferbot</strong> is switched on under <strong>App embeds</strong>, then click <strong>Save</strong>.
+      </div>
+      <a class="cb-embed-link" id="cb-embed-link" href="#" target="_top">Open the theme editor (App embeds)</a>
+    </div>
+    <button class="cb-save" id="cb-save" type="submit">Save - start chatting with my customers 🎉</button>
     <details class="cb-advanced">
       <summary>Advanced settings (optional - the defaults are fine)</summary>
       <label for="cb-embed" style="display:block;margin-top:12px;font-weight:600">How the chat appears</label>
       <select class="cb-select" id="cb-embed" name="embedType">
-        <option value="live_chat" ${embedType === 'live_chat' ? 'selected' : ''}>Floating chat bubble (recommended)</option>
-        <option value="popup_chat" ${embedType === 'popup_chat' ? 'selected' : ''}>Popup window</option>
+        <option value="live_chat">Floating chat bubble (recommended)</option>
+        <option value="popup_chat">Popup window</option>
       </select>
     </details>
   </form>
   <p class="cb-help">Need help? Write to <a href="mailto:support@conferbot.com">support@conferbot.com</a></p>
 </div>
 <script>
+(function () {
+  var form = document.getElementById('cb-form');
+  var input = document.getElementById('cb-id');
+  var toggle = document.getElementById('cb-enabled');
+  var embed = document.getElementById('cb-embed');
+  var statusEl = document.getElementById('cb-status');
+  var saveBtn = document.getElementById('cb-save');
+  var embedLink = document.getElementById('cb-embed-link');
+
+  function show(kind, text) {
+    statusEl.className = 'cb-status ' + kind;
+    statusEl.textContent = text;
+  }
+
+  function describe(s, saved) {
+    if (saved && s.enabled) return show('ok', '✅ Saved! If you have not yet, switch on Conferbot under App embeds in the theme editor (step 3) and the chat goes live.');
+    if (saved) return show('ok', '✅ Saved. The chat stays off on your storefront until you turn it on.');
+    if (!s.botId) return show('warn', '👇 Just one step: paste your Chatbot ID below and press the big blue button.');
+    if (!s.enabled) return show('warn', '⏸️ The chat is currently switched OFF. Turn it on below when you are ready.');
+    return show('ok', '✅ All set! The chat shows on your store while Conferbot is on under App embeds (step 3).');
+  }
+
+  function fill(s) {
+    document.getElementById('cb-shop').textContent = s.shop;
+    input.value = s.botId || '';
+    toggle.checked = !!s.enabled;
+    embed.value = s.embedType === 'popup_chat' ? 'popup_chat' : 'live_chat';
+    if (s.themeEditorUrl) embedLink.href = s.themeEditorUrl;
+  }
+
+  // Every call carries a fresh App Bridge session token.
+  function api(method, body) {
+    if (!window.shopify || typeof window.shopify.idToken !== 'function') {
+      return Promise.reject(new Error('Open Conferbot from your Shopify admin (Apps > Conferbot).'));
+    }
+    return window.shopify.idToken().then(function (token) {
+      var opts = { method: method, headers: { Authorization: 'Bearer ' + token } };
+      if (body) {
+        opts.headers['Content-Type'] = 'application/json';
+        opts.body = JSON.stringify(body);
+      }
+      return fetch('/api/settings', opts);
+    }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (data) {
+        if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+        return data;
+      });
+    });
+  }
+
+  api('GET').then(function (s) { fill(s); describe(s, false); })
+    .catch(function (e) { show('warn', e.message); });
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    saveBtn.disabled = true;
+    api('POST', { botId: input.value, enabled: toggle.checked ? '1' : '', embedType: embed.value })
+      .then(function (s) { fill(s); describe(s, true); })
+      .catch(function (err) { show('warn', err.message); })
+      .then(function () { saveBtn.disabled = false; });
+  });
+
   document.getElementById('cb-use-demo').addEventListener('click', function (e) {
     e.preventDefault();
-    var input = document.getElementById('cb-id');
     input.value = this.getAttribute('data-demo-id');
-    var toggle = document.querySelector('.cb-switch input');
-    if (toggle) toggle.checked = true;
+    toggle.checked = true;
     input.focus();
   });
+})();
 </script>
 </body>
 </html>`;
