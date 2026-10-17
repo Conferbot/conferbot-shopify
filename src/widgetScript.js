@@ -1,8 +1,11 @@
 'use strict';
 
 /**
- * Generates the JavaScript served to storefronts by GET /script.js.
- * Same loader contract as every Conferbot embed:
+ * Generates the JavaScript served by GET /script.js, the loader the 0.1.0
+ * ScriptTag points at (kept until those ScriptTags are deleted). New installs
+ * get the same loader from the theme app extension
+ * (extensions/conferbot-embed/blocks/conferbot-embed.liquid); keep the two in
+ * step. Same loader contract as every Conferbot embed:
  *   window.ConferbotWidget(botId, embedType, options)
  * Shop context rides in options.customData; Shopify customer identity is
  * picked up client-side from window.Shopify/meta when available.
