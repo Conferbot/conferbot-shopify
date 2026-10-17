@@ -1,0 +1,4 @@
+# Theme app extension: the Conferbot chat widget as an app embed block.
+# https://shopify.dev/docs/apps/build/online-store/theme-app-extensions/configuration
+name = "conferbot-embed"
+type = "theme"
