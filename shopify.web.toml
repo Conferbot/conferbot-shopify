@@ -1,0 +1,8 @@
+# Tells `shopify app dev` how to run this server. The CLI passes PORT,
+# SHOPIFY_API_KEY, SHOPIFY_API_SECRET and APP_URL to the process.
+name = "conferbot-shopify"
+roles = [ "frontend", "backend" ]
+webhooks_path = "/webhooks"
+
+[commands]
+dev = "npm run dev"
