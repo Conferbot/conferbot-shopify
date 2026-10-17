@@ -5,7 +5,9 @@ const path = require('path');
 
 /**
  * Tiny JSON-file store for per-shop state: { [shopDomain]: { accessToken,
- * botId, enabled, scriptTagId } }. Deliberately dependency-free; swap for
+ * accessTokenExpiresAt, appInstallationId, botId, enabled, embedType } }
+ * (0.1.0 installs may also hold scriptTagId and, until the old ScriptTag is
+ * deleted, legacyAccessToken). Deliberately dependency-free; swap for
  * Redis/Postgres behind the same four functions when going multi-instance.
  */
 class ShopStore {
