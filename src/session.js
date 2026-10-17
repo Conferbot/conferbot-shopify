@@ -3,59 +3,79 @@
 const crypto = require('crypto');
 
 /**
- * Short-lived tokens that tie a settings page (and its save) to one shop.
+ * App Bridge session tokens (Shopify calls them ID tokens).
  *
- * The admin page used to trust a bare ?shop= parameter, so anyone could open
- * or save any store's settings and point its chat at their own bot. Now the
- * page opens only from Shopify's signed admin launch (or right after the
- * install), and the form carries a token signed with the app secret that the
- * save checks.
- *
- * Token: base64url("<shop>|<expiry ms>") + "." + hex HMAC-SHA256 of that part.
+ * The embedded settings page asks App Bridge for a token (`shopify.idToken()`)
+ * and sends it as `Authorization: Bearer <token>` on every call to this app.
+ * It is a JWT signed HS256 with the app's client secret. Per shopify.dev
+ * (Authentication > ID tokens) the backend must check:
+ *   - the signature (HS256, client secret)
+ *   - exp in the future, nbf in the past
+ *   - aud equals the app's client ID
+ *   - iss and dest have the same hostname
+ * The shop is the dest hostname, so a token can only ever act for its own shop.
  */
 
-const b64url = (s) => Buffer.from(s, 'utf8').toString('base64url');
-const unb64url = (s) => Buffer.from(s, 'base64url').toString('utf8');
+const SHOP_RE = /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/;
+// Small allowance for clock drift between Shopify and this server.
+const LEEWAY_SEC = 5;
 
-function sign(part, secret) {
-  return crypto.createHmac('sha256', secret).update(part).digest('hex');
-}
-
-function issueToken(shop, secret, ttlMs = 60 * 60 * 1000, now = Date.now()) {
-  const part = b64url(`${shop}|${now + ttlMs}`);
-  return `${part}.${sign(part, secret)}`;
-}
-
-/** True when the token was issued by us for this shop and has not expired. */
-function verifyToken(token, shop, secret, now = Date.now()) {
-  if (typeof token !== 'string' || !secret) return false;
-  const dot = token.indexOf('.');
-  if (dot < 1) return false;
-  const part = token.slice(0, dot);
-  const mac = token.slice(dot + 1);
-  const want = Buffer.from(sign(part, secret), 'utf8');
-  const got = Buffer.from(mac, 'utf8');
-  if (want.length !== got.length || !crypto.timingSafeEqual(want, got)) return false;
-  let decoded;
+function hostOf(url) {
   try {
-    decoded = unb64url(part);
+    return new URL(String(url)).hostname;
   } catch (_) {
-    return false;
+    return '';
   }
-  const bar = decoded.lastIndexOf('|');
-  if (bar < 1) return false;
-  const tokenShop = decoded.slice(0, bar);
-  const exp = Number(decoded.slice(bar + 1));
-  return tokenShop === shop && Number.isFinite(exp) && exp > now;
+}
+
+function parseJson(b64) {
+  try {
+    return JSON.parse(Buffer.from(b64, 'base64url').toString('utf8'));
+  } catch (_) {
+    return null;
+  }
 }
 
 /**
- * Shopify's admin launch: the app URL carries hmac + timestamp signed with the
- * app secret. Fresh within a day (Shopify signs every load).
+ * @param {string} token the bearer JWT
+ * @param {{ apiKey: string, apiSecret: string, now?: number }} opts
+ * @returns {{ shop: string, payload: object } | null} null when invalid
  */
-function isFreshLaunch(query, now = Date.now(), maxAgeMs = 24 * 60 * 60 * 1000) {
-  const ts = Number(query && query.timestamp) * 1000;
-  return Number.isFinite(ts) && Math.abs(now - ts) <= maxAgeMs;
+function verifySessionToken(token, { apiKey, apiSecret, now = Date.now() }) {
+  if (typeof token !== 'string' || !apiKey || !apiSecret) return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  const [h, p, s] = parts;
+
+  const header = parseJson(h);
+  if (!header || header.alg !== 'HS256') return null;
+
+  const want = crypto.createHmac('sha256', apiSecret).update(`${h}.${p}`).digest();
+  let got;
+  try {
+    got = Buffer.from(s, 'base64url');
+  } catch (_) {
+    return null;
+  }
+  if (want.length !== got.length || !crypto.timingSafeEqual(want, got)) return null;
+
+  const payload = parseJson(p);
+  if (!payload) return null;
+  const nowSec = Math.floor(now / 1000);
+  if (!Number.isFinite(payload.exp) || payload.exp + LEEWAY_SEC <= nowSec) return null;
+  if (!Number.isFinite(payload.nbf) || payload.nbf - LEEWAY_SEC > nowSec) return null;
+  const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+  if (!aud.includes(apiKey)) return null;
+
+  const shop = hostOf(payload.dest);
+  if (!SHOP_RE.test(shop) || hostOf(payload.iss) !== shop) return null;
+  return { shop, payload };
 }
 
-module.exports = { issueToken, verifyToken, isFreshLaunch };
+/** Pulls the token out of `Authorization: Bearer <token>`. */
+function bearerToken(header) {
+  const m = /^Bearer\s+(\S+)$/i.exec(String(header || ''));
+  return m ? m[1] : '';
+}
+
+module.exports = { verifySessionToken, bearerToken };
