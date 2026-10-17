@@ -1,12 +1,13 @@
 {
   "name": "conferbot-shopify",
-  "version": "0.1.0",
-  "description": "Conferbot - AI Chatbot, Live Chat & Customer Support for Shopify. Installs the Conferbot widget on a Shopify storefront via ScriptTag.",
+  "version": "0.2.0",
+  "description": "Conferbot - AI Chatbot, Live Chat & Customer Support for Shopify. Adds the Conferbot widget to a Shopify storefront through a theme app extension (app embed block).",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node --test test/"
+    "test": "node --test test/",
+    "lint": "eslint ."
   },
   "engines": {
     "node": ">=18"
@@ -15,5 +16,10 @@
     "express": "^4.19.0"
   },
   "license": "MIT",
-  "author": "Conferbot <support@conferbot.com>"
+  "author": "Conferbot <support@conferbot.com>",
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "globals": "^17.13.0"
+  }
 }
