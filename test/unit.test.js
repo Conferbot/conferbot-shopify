@@ -10,19 +10,35 @@ const fs = require('node:fs');
 const shopify = require('../src/shopify');
 const { isValidBotId, extractBotId, buildLoaderScript } = require('../src/widgetScript');
 const ShopStore = require('../src/store');
-const { escapeHtml } = require('../src/adminPage');
+const { escapeHtml, renderAdminPage } = require('../src/adminPage');
+const { verifySessionToken, bearerToken } = require('../src/session');
 
 const DEMO_ID = '691c970890527a0468f9b2c9';
 const SECRET = 'shhh-test-secret';
+const API_KEY = 'test-client-id';
+const ROOT = path.join(__dirname, '..');
 
-function sign(query, secret) {
-  const message = Object.keys(query)
-    .filter((k) => k !== 'hmac' && k !== 'signature')
-    .sort()
-    .map((k) => `${k}=${query[k]}`)
-    .join('&');
-  return crypto.createHmac('sha256', secret).update(message).digest('hex');
+/** Builds an App Bridge style session token (HS256 JWT). */
+function sessionToken(claims = {}, { secret = SECRET, alg = 'HS256' } = {}) {
+  const now = Math.floor(Date.now() / 1000);
+  const payload = {
+    iss: 'https://test-store.myshopify.com/admin',
+    dest: 'https://test-store.myshopify.com',
+    aud: API_KEY,
+    sub: '42',
+    exp: now + 60,
+    nbf: now - 1,
+    iat: now - 1,
+    jti: crypto.randomUUID(),
+    sid: 'session-1',
+    ...claims,
+  };
+  const enc = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const head = `${enc({ alg, typ: 'JWT' })}.${enc(payload)}`;
+  const sig = crypto.createHmac('sha256', secret).update(head).digest('base64url');
+  return `${head}.${sig}`;
 }
+const verify = (token) => verifySessionToken(token, { apiKey: API_KEY, apiSecret: SECRET });
 
 // ---- shop domain validation -------------------------------------------------
 
@@ -40,53 +56,80 @@ test('rejects lookalike and garbage domains', () => {
   assert.ok(!shopify.isValidShopDomain('TEST.MYSHOPIFY.COM'));
 });
 
-// ---- OAuth HMAC ---------------------------------------------------------------
+// ---- session tokens (App Bridge) ----------------------------------------------
 
-test('verifyHmac accepts a correctly signed query', () => {
-  const query = { shop: 'test-store.myshopify.com', code: 'abc', state: 'n1', timestamp: '1700000000' };
-  query.hmac = sign(query, SECRET);
-  assert.ok(shopify.verifyHmac(query, SECRET));
+test('session token: a valid token yields its shop', () => {
+  const s = verify(sessionToken());
+  assert.ok(s);
+  assert.strictEqual(s.shop, 'test-store.myshopify.com');
 });
 
-test('verifyHmac rejects a tampered query', () => {
-  const query = { shop: 'test-store.myshopify.com', code: 'abc', state: 'n1', timestamp: '1700000000' };
-  query.hmac = sign(query, SECRET);
-  query.code = 'evil';
-  assert.ok(!shopify.verifyHmac(query, SECRET));
+test('session token: expired, not yet valid, or for another app is refused', () => {
+  const now = Math.floor(Date.now() / 1000);
+  assert.strictEqual(verify(sessionToken({ exp: now - 30 })), null);
+  assert.strictEqual(verify(sessionToken({ nbf: now + 60 })), null);
+  assert.strictEqual(verify(sessionToken({ aud: 'some-other-app' })), null);
+  assert.strictEqual(verify(sessionToken({ exp: undefined })), null);
 });
 
-test('verifyHmac rejects wrong secret, missing hmac, and non-string hmac', () => {
-  const query = { shop: 'test-store.myshopify.com', code: 'abc' };
-  query.hmac = sign(query, SECRET);
-  assert.ok(!shopify.verifyHmac(query, 'other-secret'));
-  assert.ok(!shopify.verifyHmac({ shop: 'x.myshopify.com' }, SECRET));
-  assert.ok(!shopify.verifyHmac({ shop: 'x.myshopify.com', hmac: ['a', 'b'] }, SECRET));
+test('session token: wrong secret, alg none, or a tampered payload is refused', () => {
+  assert.strictEqual(verify(sessionToken({}, { secret: 'not-the-secret' })), null);
+  const none = sessionToken({}, { alg: 'none' });
+  assert.strictEqual(verify(none), null);
+  const [h, , sig] = sessionToken().split('.');
+  const evil = Buffer.from(JSON.stringify({ dest: 'https://victim.myshopify.com' })).toString('base64url');
+  assert.strictEqual(verify(`${h}.${evil}.${sig}`), null);
+  assert.strictEqual(verify('not.a.jwt'), null);
+  assert.strictEqual(verify(''), null);
+  assert.strictEqual(verifySessionToken(sessionToken(), { apiKey: API_KEY, apiSecret: '' }), null);
 });
 
-test('verifyHmac excludes hmac and signature params from the message', () => {
-  const query = { shop: 'test-store.myshopify.com', code: 'abc', signature: 'legacy' };
-  query.hmac = sign(query, SECRET);
-  assert.ok(shopify.verifyHmac(query, SECRET));
+test('session token: iss and dest must be the same myshopify shop', () => {
+  assert.strictEqual(verify(sessionToken({ iss: 'https://other.myshopify.com/admin' })), null);
+  assert.strictEqual(verify(sessionToken({ dest: 'https://evil.com', iss: 'https://evil.com/admin' })), null);
 });
 
-// ---- authorize URL ---------------------------------------------------------
+test('bearerToken reads the Authorization header', () => {
+  assert.strictEqual(bearerToken('Bearer abc.def.ghi'), 'abc.def.ghi');
+  assert.strictEqual(bearerToken('bearer x'), 'x');
+  assert.strictEqual(bearerToken('Basic abc'), '');
+  assert.strictEqual(bearerToken(undefined), '');
+});
 
-test('buildAuthorizeUrl targets the shop admin with the right params', () => {
-  const url = shopify.buildAuthorizeUrl({
-    shop: 'test-store.myshopify.com',
-    apiKey: 'key123',
-    scopes: 'write_script_tags',
-    redirectUri: 'https://app.example.com/auth/callback',
-    state: 'nonce9',
-    adminBase: 'https://{shop}',
+// ---- metafields + theme editor link ----------------------------------------------
+
+test('settingsMetafields: the four app-data metafields the app embed reads', () => {
+  const owner = 'gid://shopify/AppInstallation/1';
+  const fields = shopify.settingsMetafields(owner, {
+    botId: DEMO_ID, enabled: true, embedType: 'fullpage_chat', scriptUrl: 'https://cdn.conferbot.com/dist/v1/widget.min.js',
   });
-  const u = new URL(url);
+  assert.deepStrictEqual(fields.map((f) => [f.key, f.type, f.value]), [
+    ['bot_id', 'single_line_text_field', DEMO_ID],
+    ['enabled', 'boolean', 'true'],
+    ['embed_type', 'single_line_text_field', 'live_chat'],
+    ['script_url', 'url', 'https://cdn.conferbot.com/dist/v1/widget.min.js'],
+  ]);
+  for (const f of fields) {
+    assert.strictEqual(f.ownerId, owner);
+    assert.strictEqual(f.namespace, 'conferbot');
+  }
+});
+
+test('themeEditorEmbedUrl deep-links to App embeds with this app activated', () => {
+  const u = new URL(shopify.themeEditorEmbedUrl('test-store.myshopify.com', 'key123', 'conferbot-embed'));
   assert.strictEqual(u.origin, 'https://test-store.myshopify.com');
-  assert.strictEqual(u.pathname, '/admin/oauth/authorize');
-  assert.strictEqual(u.searchParams.get('client_id'), 'key123');
-  assert.strictEqual(u.searchParams.get('scope'), 'write_script_tags');
-  assert.strictEqual(u.searchParams.get('state'), 'nonce9');
-  assert.strictEqual(u.searchParams.get('redirect_uri'), 'https://app.example.com/auth/callback');
+  assert.strictEqual(u.pathname, '/admin/themes/current/editor');
+  assert.strictEqual(u.searchParams.get('context'), 'apps');
+  assert.strictEqual(u.searchParams.get('activateAppId'), 'key123/conferbot-embed');
+});
+
+test('webhook HMAC: base64 HMAC of the raw body only', () => {
+  const body = Buffer.from('{"id":1}');
+  const good = crypto.createHmac('sha256', SECRET).update(body).digest('base64');
+  assert.ok(shopify.verifyWebhookHmac(body, good, SECRET));
+  assert.ok(!shopify.verifyWebhookHmac(Buffer.from('{"id":2}'), good, SECRET));
+  assert.ok(!shopify.verifyWebhookHmac(body, good, ''));
+  assert.ok(!shopify.verifyWebhookHmac('{"id":1}', good, SECRET));
 });
 
 // ---- bot id helpers (same contract as the PrestaShop module) ---------------
@@ -172,4 +215,51 @@ test('store survives a corrupt data file', () => {
 
 test('escapeHtml neutralizes markup', () => {
   assert.strictEqual(escapeHtml('<script>"x"&\'y\''), '&lt;script&gt;&quot;x&quot;&amp;&#39;y&#39;');
+});
+
+test('settings page loads App Bridge first and carries no shop data', () => {
+  const html = renderAdminPage({ apiKey: 'key"123', demoBotId: DEMO_ID });
+  const head = html.slice(html.indexOf('<head>'), html.indexOf('</head>'));
+  assert.ok(head.includes('<meta name="shopify-api-key" content="key&quot;123">'));
+  const firstScript = head.match(/<script[^>]*>/)[0];
+  assert.strictEqual(firstScript, '<script src="https://cdn.shopify.com/shopifycloud/app-bridge.js">');
+  assert.ok(html.includes('shopify.idToken()'));
+  assert.ok(html.includes('App embeds'));
+  assert.ok(html.includes('id="cb-embed-link"'));
+});
+
+// ---- Shopify CLI layout ----------------------------------------------------------
+
+const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
+
+test('app embed block injects the same loader as /script.js', () => {
+  const liquid = read('extensions/conferbot-embed/blocks/conferbot-embed.liquid');
+  const schema = JSON.parse(liquid.match(/{% schema %}([\s\S]*?){% endschema %}/)[1]);
+  assert.strictEqual(schema.target, 'body');
+  assert.ok(schema.name.length < 25);
+  for (const key of ['bot_id', 'enabled', 'embed_type', 'script_url']) {
+    assert.ok(liquid.includes(`app.metafields.conferbot.${key}.value`), key);
+  }
+  assert.ok(liquid.includes("'https://cdn.conferbot.com/dist/v1/widget.min.js'"));
+  // The loader body (everything after the inlined cfg) must match the served one line for line.
+  const served = buildLoaderScript({ botId: DEMO_ID, enabled: true }, 's.myshopify.com', CFG);
+  const body = (js) => js.slice(js.indexOf("  if (document.getElementById('conferbot-js'))"), js.indexOf('})();'));
+  assert.strictEqual(body(liquid), body(served));
+});
+
+test('shopify.app.toml: placeholders only, 2026-07 webhooks, compliance topics', () => {
+  const toml = read('shopify.app.toml');
+  assert.match(toml, /^client_id = "YOUR_SHOPIFY_CLIENT_ID"$/m);
+  assert.match(toml, /^application_url = "https:\/\/your-app\.example\.com\/app"$/m);
+  assert.match(toml, /^embedded = true$/m);
+  assert.match(toml, /^api_version = "2026-07"$/m);
+  assert.ok(!/secret\s*=/.test(toml));
+  assert.ok(!/script_tags/.test(toml));
+  for (const topic of ['customers/data_request', 'customers/redact', 'shop/redact']) {
+    assert.ok(toml.includes(`compliance_topics = [ "${topic}" ]`), topic);
+    assert.ok(toml.includes(`uri = "/webhooks/${topic}"`), topic);
+  }
+  assert.ok(toml.includes('topics = [ "app/uninstalled" ]'));
+  const ext = read('extensions/conferbot-embed/shopify.extension.toml');
+  assert.match(ext, /^type = "theme"$/m);
 });
