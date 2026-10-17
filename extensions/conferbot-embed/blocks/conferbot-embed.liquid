@@ -1,0 +1,55 @@
+{%- comment -%}
+  Conferbot chat widget (app embed). Merchants switch it on in the theme
+  editor under App embeds; the app's settings page writes the bot settings
+  as app-data metafields (namespace "conferbot") that this block reads.
+  The loader below is the same one src/widgetScript.js serves at /script.js:
+  same script URL, bot ID, embed type and options.
+{%- endcomment -%}
+{%- liquid
+  assign cb_bot_id = app.metafields.conferbot.bot_id.value | strip
+  assign cb_enabled = app.metafields.conferbot.enabled.value
+  assign cb_embed_type = app.metafields.conferbot.embed_type.value
+  if cb_embed_type != 'popup_chat'
+    assign cb_embed_type = 'live_chat'
+  endif
+  assign cb_script_url = app.metafields.conferbot.script_url.value | default: 'https://cdn.conferbot.com/dist/v1/widget.min.js'
+-%}
+{%- if cb_enabled == true and cb_bot_id.size == 24 -%}
+<script>
+(function () {
+  var cfg = {
+    botId: {{ cb_bot_id | json }},
+    embedType: {{ cb_embed_type | json }},
+    scriptUrl: {{ cb_script_url | json }},
+    shop: {{ shop.permanent_domain | json }}
+  };
+  if (document.getElementById('conferbot-js')) return;
+  var js = document.createElement('script');
+  js.async = true;
+  js.src = cfg.scriptUrl;
+  js.id = 'conferbot-js';
+  js.charset = 'UTF-8';
+  js.onload = function () {
+    var options = { customData: { platform: 'shopify', shopDomain: cfg.shop } };
+    try {
+      if (window.Shopify && window.Shopify.shop) options.customData.shopDomain = window.Shopify.shop;
+      if (window.Shopify && window.Shopify.currency && window.Shopify.currency.active) {
+        options.customData.storeCurrency = window.Shopify.currency.active;
+      }
+      var c = window.__st || {};
+      if (c.cid) options.user = { id: 'shopify-' + c.cid };
+    } catch (e) {}
+    window.ConferbotWidget(cfg.botId, cfg.embedType, options);
+  };
+  (document.head || document.documentElement).appendChild(js);
+})();
+</script>
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "Conferbot chat",
+  "target": "body",
+  "settings": []
+}
+{% endschema %}
