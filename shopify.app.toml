@@ -1,0 +1,47 @@
+# Shopify CLI app configuration. https://shopify.dev/docs/apps/build/cli-for-apps/app-configuration
+#
+# Placeholders: replace client_id with the app's Client ID from the Dev
+# Dashboard and every https://your-app.example.com with the public HTTPS URL
+# this server runs on (APP_URL), then run `shopify app deploy`.
+# The client secret never goes in this file: set SHOPIFY_API_SECRET on the host.
+
+name = "Conferbot AI Chatbot"
+client_id = "YOUR_SHOPIFY_CLIENT_ID"
+application_url = "https://your-app.example.com/app"
+embedded = true
+
+[access_scopes]
+# Shopify-managed install with token exchange. No scope is needed: the
+# widget settings live in app-data metafields on the app installation, and
+# the storefront widget is the theme app extension in extensions/conferbot-embed.
+scopes = ""
+use_legacy_install_flow = false
+
+[auth]
+redirect_urls = [ "https://your-app.example.com/app" ]
+
+[webhooks]
+api_version = "2026-07"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "/webhooks/app/uninstalled"
+
+  [[webhooks.subscriptions]]
+  compliance_topics = [ "customers/data_request" ]
+  uri = "/webhooks/customers/data_request"
+
+  [[webhooks.subscriptions]]
+  compliance_topics = [ "customers/redact" ]
+  uri = "/webhooks/customers/redact"
+
+  [[webhooks.subscriptions]]
+  compliance_topics = [ "shop/redact" ]
+  uri = "/webhooks/shop/redact"
+
+[build]
+automatically_update_urls_on_dev = true
+include_config_on_deploy = true
+
+[pos]
+embedded = false
